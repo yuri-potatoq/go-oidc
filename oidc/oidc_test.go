@@ -116,17 +116,18 @@ func TestAccessTokenVerification(t *testing.T) {
 
 func TestNewProvider(t *testing.T) {
 	tests := []struct {
-		name              string
-		data              string
-		issuerURLOverride string
-		trailingSlash     bool
-		wantAuthURL       string
-		wantTokenURL      string
-		wantDeviceAuthURL string
-		wantUserInfoURL   string
-		wantIssuerURL     string
-		wantAlgorithms    []string
-		wantErr           bool
+		name                  string
+		data                  string
+		issuerURLOverride     string
+		trailingSlash         bool
+		wantAuthURL           string
+		wantTokenURL          string
+		wantDeviceAuthURL     string
+		wantUserInfoURL       string
+		wantIssuerURL         string
+		wantAlgorithms        []string
+		wantErr               bool
+		customIssuerValidator IssuerValidator
 	}{
 		{
 			name: "basic_case",
@@ -277,6 +278,39 @@ func TestNewProvider(t *testing.T) {
  ]
 }`,
 		},
+		{
+			name: "custom_issuer_validator_trust_on_issuer",
+			data: `{
+				"issuer": "https://trusted-domain.com",
+				"authorization_endpoint": "https://trusted-domain.com/auth",
+				"token_endpoint": "https://trusted-domain.com/token",
+				"jwks_uri": "https://trusted-domain.com/keys",
+				"id_token_signing_alg_values_supported": ["RS256"]
+			}`,
+			customIssuerValidator: func(_, gotIssuer string) bool {
+				return strings.Contains(gotIssuer, "trusted-domain")
+			},
+			wantAuthURL:    "https://trusted-domain.com/auth",
+			wantTokenURL:   "https://trusted-domain.com/token",
+			wantAlgorithms: []string{"RS256"},
+		},
+		{
+			name: "custom_issuer_validator_DO_NOT_trust_on_issuer",
+			data: `{
+				"issuer": "https://trusted-domain.com",
+				"authorization_endpoint": "https://trusted-domain/auth",
+				"token_endpoint": "https://trusted-domain.com/token",
+				"jwks_uri": "https://trusted-domain.com/keys",
+				"id_token_signing_alg_values_supported": ["RS256"]
+			}`,
+			customIssuerValidator: func(_, _ string) bool {
+				return false
+			},
+			wantErr:        true,
+			wantAuthURL:    "https://trusted-domain.com/auth",
+			wantTokenURL:   "https://trusted-domain.com/token",
+			wantAlgorithms: []string{"RS256"},
+		},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -302,6 +336,10 @@ func TestNewProvider(t *testing.T) {
 
 			if test.issuerURLOverride != "" {
 				ctx = InsecureIssuerURLContext(ctx, test.issuerURLOverride)
+			}
+
+			if test.customIssuerValidator != nil {
+				ctx = CustomIssuerValidationContext(ctx, test.customIssuerValidator)
 			}
 
 			p, err := NewProvider(ctx, issuer)

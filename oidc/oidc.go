@@ -42,7 +42,15 @@ var (
 
 type contextKey int
 
-var issuerURLKey contextKey
+// IssuerValidator will return true if issuer can be trusted.
+// currIssuer represent the issuer from provider configuration and
+// gotIssuer is the one got by provider response.
+type IssuerValidator func(currIssuer, gotIssuer string) bool
+
+var (
+	issuerURLKey          contextKey
+	issuerURLValidatorKey contextKey
+)
 
 // ClientContext returns a new Context that carries the provided HTTP client.
 //
@@ -84,6 +92,20 @@ func InsecureIssuerURLContext(ctx context.Context, issuerURL string) context.Con
 	return context.WithValue(ctx, issuerURLKey, issuerURL)
 }
 
+// CustomIssuerValidationContext can set a callback function which will validate URL issuer veracity.
+// The default validator just check for issuer equality.
+//
+//	Usage:
+//
+//	ctx := oidc.InsecureIssuerURLContext(parentContext, func(_, gotIssuer string) bool {
+//	    return strings.Contains(gotIssuer, "trusted-domain")
+//	})
+//
+//	provider, err := oidc.NewProvider(ctx, discoveryBaseURL)
+func CustomIssuerValidationContext(ctx context.Context, validator IssuerValidator) context.Context {
+	return context.WithValue(ctx, issuerURLValidatorKey, validator)
+}
+
 func doRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	client := http.DefaultClient
 	if c := getClient(ctx); c != nil {
@@ -111,7 +133,7 @@ type Provider struct {
 	// when creating the common key set.
 	client *http.Client
 	// A key set that uses context.Background() and is shared between all code paths
-	// that don't have a convinent way of supplying a unique context.
+	// that don't have a convenient way of supplying a unique context.
 	commonRemoteKeySet KeySet
 }
 
@@ -232,11 +254,16 @@ func NewProvider(ctx context.Context, issuer string) (*Provider, error) {
 		return nil, fmt.Errorf("oidc: failed to decode provider discovery object: %v", err)
 	}
 
+	issuerValidator := func(currIssuer, gotIssuer string) bool { return currIssuer == gotIssuer }
+	if customValidator, ok := ctx.Value(issuerURLValidatorKey).(IssuerValidator); ok {
+		issuerValidator = customValidator
+	}
+
 	issuerURL, skipIssuerValidation := ctx.Value(issuerURLKey).(string)
 	if !skipIssuerValidation {
 		issuerURL = issuer
 	}
-	if p.Issuer != issuerURL && !skipIssuerValidation {
+	if !skipIssuerValidation && !issuerValidator(issuerURL, p.Issuer) {
 		return nil, fmt.Errorf("oidc: issuer did not match the issuer returned by provider, expected %q got %q", issuer, p.Issuer)
 	}
 	var algs []string
